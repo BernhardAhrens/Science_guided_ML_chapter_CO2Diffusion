@@ -357,13 +357,13 @@ problem = ODEProblem(f,vec(u0),tspan,p)
 # Ds_methods
 obs = dfk
 function plot_Flux_Conc(solution)
-  p1 = plot(solution[:,1], labels = "DAMM + $Ds_method")
+  p1 = plot(solution[:,1], labels = "Q₁₀ model")
   plot!(resDAMM, labels = "DAMM")
   ppm = umolcubic_to_ppm(solution[:,[1,2,4].+1],obs.TA)
 
   # pick depth, unit check???
   pmod = plot(ppm,
-   #title = "DAMM + Diffusion $Ds_method modelled CO₂ (ppm)"
+   #title = "Q₁₀ model + Diffusion $Ds_method modelled CO₂ (ppm)"
    title = "CO₂ (ppm)"
    #,labels = ["5 cm" "10 cm" "20 cm"], legend = :inline)
    ,labels = ["mod 5 cm" "mod 10 cm" "mod 20 cm"], legend = :inline)
@@ -373,14 +373,23 @@ function plot_Flux_Conc(solution)
   plot!(size=(1100,700))
 end
 
+function plot_Flux(solution)
+  p1 = plot(solution[:,1], labels = "Q₁₀ model + Diffusion $Ds_method", colour = 4, legend = :topright, title = "CO₂ efflux (µmol m² s⁻¹)", xlab = "Months", width = 3)
+  plot!(resDAMM, labels = "Q₁₀ model" , colour = 5, width = 3)
+  plot!(size=(1100,700), left_margin=5mm, bottom_margin=5mm)
+end
+
 gr()
 tuple_Ds_methods = ("Penman", "Marshall","Millington_Quirk","Moldrup")
 for i in tuple_Ds_methods
   Ds_method = i
   @time solution = Array(solve(problem,TRBDF2(autodiff=false),reltol=1e-5,abstol=1e-5, saveat = saveat))'
+  display(plot_Flux(solution))
   display(plot_Flux_Conc(solution))
+  plot_Flux
 end
 
+png(plot_Flux(solution), joinpath("png", "Q10_vs_Q10_Diffusion"))
 
 # fast enough for now! key is to have a time resolution in years not half hours
 
