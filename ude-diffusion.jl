@@ -3,7 +3,7 @@ cd("/User/homes/bahrens/Science_guided_ML_chapter_CO2Diffusion")
 # load Project.toml and install packages
 using Pkg; Pkg.activate("."); Pkg.instantiate()
 
-using DiffEqFlux, Optim, DiffEqSensitivity, DiffEqOperators, Flux, LinearAlgebra, Interpolations, Plots, Dates, DataFrames, DataFramesMeta, CSV
+using DiffEqFlux, Optim, DiffEqSensitivity, DiffEqOperators, Flux, LinearAlgebra, Interpolations, Plots, Dates, DataFrames, DataFramesMeta, CSV, StatsBase
 
 file = "Synthetic4BookChap.csv"
 
@@ -31,8 +31,8 @@ dfk = combine(subdfall, valuecols(subdfall)[2:end-3] .=> mean .=> valuecols(subd
 #===============================================================================
 ## plotting
 ===============================================================================#
-#Plots.scalefontsizes(1/2)
-gr(size=(1100,700))
+#Plots.scalefontsizes(1/1.6)
+gr(size=(700*1.6,700), dpi = 600, thickness_scaling = 1.5)
 plot(dfk.yearmonth,dfk.wdefCum)
 
 for i in names(dfk)
@@ -213,7 +213,14 @@ Ds_method = "Moldrup"
 v_tortuosity = f_tortuosity(itp_swc(t); Ds_method = Ds_method) #* unit_conv_flux
 plot!(v_tortuosity, label = "$Ds_method tortuosity", legend = :inline, width = 1.5, xlab = "Months", ylab = "ξ")
 using Plots.PlotMeasures: mm
-plot!(size=(1100,700),left_margin=5mm, bottom_margin=5mm)
+# Plots.scalefontsizes(1/1.6)
+
+myplot = function(filename)
+  savefig("$filename.png")
+  savefig("$filename.svg")
+end
+
+myplot("tortuosity")
 
 #===============================================================================
 # learn Ds for pretraining
@@ -232,7 +239,6 @@ x_dfk = @linq dfk |>
 x_in = Array(x_dfk)'
 
 # normalization
-using StatsBase
 sdf = fit(UnitRangeTransform, x_in, dims=2)
 x_in = (Float32.(StatsBase.transform(sdf, x_in)))*2 .- 1.f0
 plot(x_in')
@@ -241,7 +247,8 @@ plot(x_in')
 #x_in2 = Flux.normalise(Array(x_dfk)')
 #plot!(x_in2')
 
-L = FastChain(FastDense(size(x_in,1), 16, tanh),FastDense(16, 16, tanh),FastDense(16, 1, x -> x^2))
+#L = FastChain(FastDense(size(x_in,1), 16, tanh),FastDense(16, 16, tanh),FastDense(16, 1, x -> x^2))
+L = FastChain(FastDense(size(x_in,1), 8, gelu),FastDense(8, 8, gelu),FastDense(8, 8, gelu),FastDense(8, 8, gelu),FastDense(8, 8, gelu),FastDense(8, 1, x -> x^2))
 p_random = Float32.(initial_params(L))
 
 L2(x) = sum(abs2, x)/length(x)
@@ -389,11 +396,13 @@ for i in tuple_Ds_methods
   plot_Flux
 end
 
-png(plot_Flux(solution), joinpath("png", "Q10_vs_Q10_Diffusion"))
 
-# fast enough for now! key is to have a time resolution in years not half hours
+@time solution = Array(solve(problem,TRBDF2(autodiff=false),reltol=1e-5,abstol=1e-5, saveat = saveat))'
 
-solution = Array(solve(problem,TRBDF2(autodiff=false),reltol=1e-4,abstol=1e-4, saveat = saveat))'
+
+gr(size=(700*1.6,700), dpi = 600, thickness_scaling = 1.5)
+plot_Flux(solution)
+myplot("Q10_vs_Q10_Diffusion")
 
 # make artificial data
 artificial = deepcopy(obs)
@@ -453,7 +462,7 @@ function fp(du,u,p,t)
 end
 
 pDAMM
-p = Float32.([log(6.064838);log(1.5);Flux.glorot_uniform(length(pML))])
+p = Float32.([log(6.064838*2);log(2.5);Flux.glorot_uniform(length(pML))])
 problem = ODEProblem(fp,vec(u0),tspan,p)
 
 using DiffEqSensitivity
@@ -510,6 +519,7 @@ function plot_Flux_Conc_obs_mod(solution)
   plot!(size=(1100,700),left_margin=5mm, bottom_margin=5mm)
 end
 plot_Flux_Conc_obs_mod(sol)
+myplot("hybrid_with_random_parameters gelu deep")
 
 using Statistics
 function loss(p)
@@ -531,11 +541,16 @@ end
 
 using Zygote
 
+losses = []
 # https://github.com/tobydriscoll/fnc-extras
 callback(θ,l) = begin
     push!(losses, l)
     if length(losses)%1==0
         println("Current loss after $(length(losses)) iterations: $(losses[end])")
+        opt_result = predict(θ,Float32.(obs.timestep_one))
+        plot_opt = plot_Flux_Conc_obs_mod(opt_result)
+        display(plot_opt)
+        #myplot("$(length(losses))")
     end
     false
 end
@@ -561,11 +576,9 @@ using Optim
 # or use BFGS (which is what I’d recommend there instead).
 
 # artificial data training
-p_dxdt = DiffEqFlux.sciml_train(loss, p, BFGS(initial_stepnorm = 0.01), maxiters = 2, cb = callback)
+p_dxdt = DiffEqFlux.sciml_train(loss, p, BFGS(initial_stepnorm = 0.01), maxiters = 10, cb = callback)
 
-p_dxdt = DiffEqFlux.sciml_train(loss, p_dxdt.minimizer, BFGS(initial_stepnorm = 0.001), maxiters = 10, cb = callback)
-
-
+p_dxdt = DiffEqFlux.sciml_train(loss, p_dxdt.minimizer, BFGS(initial_stepnorm = 0.001), maxiters = 200, cb = callback)
 
 p_dxdt = DiffEqFlux.sciml_train(loss, p_dxdt.minimizer, BFGS(initial_stepnorm = 0.01), maxiters = 100, cb = callback)
 p_dxdt = DiffEqFlux.sciml_train(loss, p_dxdt.minimizer, BFGS(initial_stepnorm = 0.01), maxiters = 100, cb = callback)
@@ -581,7 +594,229 @@ png(plot_opt, joinpath("png", "plot_opt_klappt"))
 stop("training works")
 
 
+#===============================================================================
+# # make it work with sciml_train
+===============================================================================#
+# https://github.com/SciML/DiffEqFlux.jl/issues/432
+# for sciml_train
 
+#===============================================================================
+# like Fabian with LSTM
+===============================================================================#
+
+struct RecoHybrid
+  RbNet
+  Q10
+end
+
+using Flux
+@Flux.functor RecoHybrid
+
+function (m::RecoHybrid)(x)
+  Rbin,T = x
+  Tref = 15.0
+  rb   = m.RbNet(Rbin)
+  #q10t = m.Q10[1] .^ (0.1 .* (T.-Tref))
+  #reco = q10t .- rb
+end
+
+RecoHybrid(RbNet) = RecoHybrid(RbNet,log[1.5])
+
+#mnn = Chain(LSTM(2, 16), Dense(16, 1, x -> x^2)) # 1261
+#length(initial_params(mnn))
+
+mnn = Chain(Dense(2, 16,tanh),Dense(16, 16,tanh),Dense(16, 1)) # 62
+length(initial_params(mnn))
+
+m = RecoHybrid(mnn,[1.3])
+
+timeobs = 1:length(obs.timestep_one)
+
+# normalization
+using StatsBase
+sdf = fit(UnitRangeTransform, obs.TA, dims=1)
+xTA = (Float32.(StatsBase.transform(sdf, obs.TA)))*2 .- 1.f0
+plot(xTA)
+
+sdf = fit(UnitRangeTransform, obs.SWC_1, dims=1)
+xSWC_1= (Float32.(StatsBase.transform(sdf, obs.SWC_1)))*2 .- 1.f0
+plot(xSWC_1)
+
+tmpConstructSequence = [xTA xSWC_1]
+Rbin = [tmpConstructSequence[t,:] for t = timeobs]
+T = [[obs.TA[t]] for t = timeobs]
+
+
+# implement minibatches https://diffeqflux.sciml.ai/v1.24/examples/minibatch/
+using Zygote
+function destructure(m; cache = IdDict())
+    xs = Zygote.Buffer([])
+    Flux.fmap(m) do x
+      if x isa AbstractArray
+        push!(xs, x)
+      else
+        cache[x] = x
+      end
+      return x
+    end
+    return vcat(vec.(copy(xs))...), p -> _restructure(m, p, cache = cache)
+  end
+  
+  function _restructure(m, xs; cache = IdDict())
+    i = 0
+    Flux.fmap(m) do x
+      x isa AbstractArray || return cache[x]
+      x = reshape(xs[i.+(1:length(x))], size(x))
+      i += length(x)
+      return x
+    end
+  end
+  
+
+p, re = destructure(m)
+
+function fQ10(T;Q10,Tref = 15.0 + 273.15)
+  Q10 .^ (0.1 .* (T .- Tref))
+end 
+
+function fRbQ10(Rb,q10t)
+  q10t .* Rb
+  #Rb .- q10t
+end
+
+
+function fhybrid(m::RecoHybrid,Rbin,T)
+  Flux.reset!(m.RbNet)
+  rb   = m.RbNet.(Rbin)
+  q10t = fQ10.(T;Q10=m.Q10[1])
+  #q10t = fDAMMLSTM.(T,Moistv;Q10=m.Q10[1],KmSx=m.Q10[2],KmO2=m.Q10[3])
+  reco = fRbQ10.(rb,q10t)
+end
+
+res = fhybrid(m,Rbin,T)
+
+function predict_adjoint() 
+  Array(fhybrid(m,Rbin,T))
+end
+
+predict_adjoint() 
+
+function loss_adjoint()
+  pred = reduce(vcat,predict_adjoint())
+  res = (Float64.(obs.co2flux_umol_m2_s1'[timeobs]) .- pred[timeobs])
+  sum(abs2, res[.!isnan.(res)])/length(res[.!isnan.(res)])
+end
+
+loss_value = loss_adjoint()
+
+using BSON: @load 
+using Zygote
+#@load "weights/mymodel.bson" weights
+#Flux.loadparams!(m, weights)
+loss_adjoint()
+
+using BSON: @save
+data = Iterators.repeated((), 100)
+opt = ADAM(.001)
+#opt = ADAMW()
+iter = 0
+
+thelosses = []
+push!(thelosses, loss_value)
+cb = function ()
+global iter += 1
+if iter % 20 == 0
+  loss_value = loss_adjoint()
+  display("After $iter iterations, the loss is $loss_value")
+  theweights = params(m)
+  if loss_value < minimum(thelosses)
+      @save "weights/mymodel.bson" theweights
+      resopt = fhybrid(m,Rbin,T)
+      resopt = reduce(vcat,resopt)
+  
+      # initial plot with random weights and biases
+      p1 = plot_Flux_LSTM_hybrid(resopt)
+  
+      display(p1)
+  end
+  push!(thelosses, loss_value)
+end
+end
+cb()
+Flux.train!(loss_adjoint, Flux.params(m), data, opt, cb = cb)
+cb()
+
+@load "weights/mymodel.bson" theweights
+Flux.loadparams!(m, theweights)
+loss_adjoint()
+
+png(plot_opt, joinpath("png", "plot_lstm"))
+
+m.Q10
+resopt = fhybrid(m,Rbin,T)
+resopt = reduce(vcat,resopt)
+
+
+
+
+
+function fhybrid_params(p,Rbin,T)
+    Tref = 15.0 + 273.15
+    mr = re(p)
+    Flux.reset!(mr.RbNet)
+    rb   = mr.RbNet.(Rbin)
+    q10t = fQ10.(T;Q10=exp(mr.Q10[1]))
+    reco = fRbQ10.(rb,q10t)
+  end
+
+
+function predict_adjoint_params(p) 
+    Array(fhybrid_params(p,Rbin,T))
+end
+
+predict_adjoint_params(Float32.(p))
+
+function loss_adjoint_params(p)
+    pred = reduce(vcat,predict_adjoint_params(p))
+    res = (obs.co2flux_umol_m2_s1'[timeobs] .- pred[timeobs])
+    sum(abs2, res[.!isnan.(res)])/length(res[.!isnan.(res)])
+end
+
+testsciml = DiffEqFlux.sciml_train(loss_adjoint_params
+    ,Float32.(p)
+    ,ADAM()
+    ,maxiters=100
+    #,allow_f_increases = true
+    #,save_best = true
+    ,cb = callback
+    )
+
+testsciml = DiffEqFlux.sciml_train(loss_adjoint_params
+    ,Float32.([testsciml.minimizer[1:end-1];1.5])
+    ,BFGS(initial_stepnorm=0.1)
+    ,maxiters=10
+    ,allow_f_increases = true
+    #,save_best = true
+    ,cb = callback
+    )
+
+res = fhybrid_params(testsciml.minimizer,Rbin,T)
+res = reduce(vcat,res)
+ 
+function plot_Flux_LSTM_hybrid(solution)
+  p1 = scatter(obs.co2flux_umol_m2_s1, labels = "obs       ", legend = :outertopright, title = "CO₂ efflux (µmol m² s⁻¹)", xlab = "Months", colour = 4)
+  #plot!(resDAMM, labels = "DAMM", legend = :topright)
+  plot!(solution, labels = "Hybrid-Q10-FNN       ", colour = 4)
+
+  plot!(size=(1100,700),left_margin=5mm, bottom_margin=5mm)
+end
+
+plot_opt = plot_Flux_LSTM_hybrid(res)
+png(plot_opt, joinpath("png", "plot_lstm"))
+
+# initial plot with random weights and biases
+plot(obs.co2flux_umol_m2_s1)
+plot!(reduce(vcat,res), alpha = 0.7)
 
 
 
